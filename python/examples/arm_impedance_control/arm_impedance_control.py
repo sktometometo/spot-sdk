@@ -26,6 +26,64 @@ from bosdyn.client.robot_command import (RobotCommandBuilder, RobotCommandClient
 from bosdyn.client.robot_state import RobotStateClient
 from bosdyn.util import seconds_to_duration
 
+def block_until_arm_arrives(command_client, cmd_id, timeout_sec=None):
+    """Helper that blocks until the arm achieves a finishing state for the specific arm command.
+
+       This helper will block and check the feedback for ArmCartesianCommand, GazeCommand,
+       ArmJointMoveCommand, and NamedArmPositionsCommand.
+
+       Args:
+        command_client: robot command client, used to request feedback
+        cmd_id: command ID returned by the robot when the arm movement command was sent.
+        timeout_sec: optional number of seconds after which we'll return no matter what
+                     the robot's state is.
+
+       Return values:
+        True if successfully got to the end of the trajectory, False if the arm stalled or
+        the move was canceled (the arm failed to reach the goal).
+    """
+    if timeout_sec is not None:
+        start_time = time.time()
+        end_time = start_time + timeout_sec
+        now = time.time()
+
+    while timeout_sec is None or now < end_time:
+        feedback_resp = command_client.robot_command_feedback(cmd_id)
+        arm_feedback = feedback_resp.feedback.synchronized_feedback.arm_command_feedback
+        #print(arm_feedback)
+
+        if arm_feedback.HasField("arm_cartesian_feedback"):
+            if arm_feedback.arm_cartesian_feedback.status == arm_command_pb2.ArmCartesianCommand.Feedback.STATUS_TRAJECTORY_COMPLETE:
+                return True
+            elif arm_feedback.arm_cartesian_feedback.status == arm_command_pb2.ArmCartesianCommand.Feedback.STATUS_TRAJECTORY_STALLED or feedback_resp.feedback.synchronized_feedback.arm_command_feedback.arm_cartesian_feedback.status == arm_command_pb2.ArmCartesianCommand.Feedback.STATUS_TRAJECTORY_CANCELLED:
+                return False
+        elif arm_feedback.HasField("arm_gaze_feedback"):
+            if arm_feedback.arm_gaze_feedback.status == arm_command_pb2.GazeCommand.Feedback.STATUS_TRAJECTORY_COMPLETE:
+                return True
+            elif arm_feedback.arm_gaze_feedback.status == arm_command_pb2.GazeCommand.Feedback.STATUS_TOOL_TRAJECTORY_STALLED:
+                return False
+        elif arm_feedback.HasField("arm_joint_move_feedback"):
+            if arm_feedback.arm_joint_move_feedback.status == arm_command_pb2.ArmJointMoveCommand.Feedback.STATUS_COMPLETE:
+                return True
+            elif arm_feedback.arm_joint_move_feedback.status == arm_command_pb2.ArmJointMoveCommand.Feedback.STATUS_STALLED:
+                return False
+        elif arm_feedback.HasField("named_arm_position_feedback"):
+            if arm_feedback.named_arm_position_feedback.status == arm_command_pb2.NamedArmPositionsCommand.Feedback.STATUS_COMPLETE:
+                return True
+            elif arm_feedback.named_arm_position_feedback.status == arm_command_pb2.NamedArmPositionsCommand.Feedback.STATUS_STALLED_HOLDING_ITEM:
+                return False
+        elif arm_feedback.HasField("arm_impedance_feedback"):
+            if arm_feedback.arm_impedance_feedback.status == arm_command_pb2.ArmImpedanceCommand.Feedback.STATUS_COMPLETE:
+                return True
+            elif arm_feedback.arm_impedance_feedback.status == arm_command_pb2.ArmImpedanceCommand.Feedback.STATUS_STALLED:
+                return False
+        else:
+            print('There is no field')
+
+        time.sleep(0.1)
+        now = time.time()
+    return False
+
 
 def impedance_command(config):
     """Sending an impedance command with the spot arm"""
@@ -156,8 +214,13 @@ def impedance_command(config):
         pt2.pose.CopyFrom(SE3Pose(0, 0, 0, Quat(1, 0, 0, 0)).to_proto())
 
         # Execute the impedance command.
+        start_time = time.perf_counter()
         cmd_id = command_client.robot_command(robot_cmd)
-        time.sleep(5.0)
+        end_01_time = time.perf_counter()
+        print('Duration for issueing command is {}'.format(end_01_time-start_time))
+        block_until_arm_arrives(command_client, cmd_id, 7.0)
+        end_02_time = time.perf_counter()
+        print('Duration for finishing command is {}'.format(end_02_time-start_time))
 
         # Now, let's move along the surface of the ground, exerting a downward force while
         # dragging the arm sideways.
@@ -197,8 +260,13 @@ def impedance_command(config):
         pt2.pose.CopyFrom(SE3Pose(0, 0, 0, Quat(1, 0, 0, 0)).to_proto())
 
         # Execute the impedance command
+        start_time = time.perf_counter()
         cmd_id = command_client.robot_command(robot_cmd)
-        time.sleep(5.0)
+        end_01_time = time.perf_counter()
+        print('Duration for issueing command is {}'.format(end_01_time-start_time))
+        block_until_arm_arrives(command_client, cmd_id, 5.0)
+        end_02_time = time.perf_counter()
+        print('Duration for finishing command is {}'.format(end_02_time-start_time))
 
         # Stow the arm
         stow_cmd = RobotCommandBuilder.arm_stow_command()
